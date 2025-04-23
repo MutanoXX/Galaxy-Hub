@@ -3,9 +3,9 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local webhookURL = "https://discord.com/api/webhooks/1347400165027217490/b0q6WACLsRPC_XjrNNNYXOKG-lRp9-vccdKxmlZE-wAMeraf5dZ5PQS0HWHd0THhp37V"
 
--- Function to wait for dungeon server load
+-- Função para esperar o carregamento do servidor da dungeon
 local function waitForDungeonLoad()
-    local timeout = 30 -- seconds
+    local timeout = 30 -- segundos
     local startTime = tick()
     while tick() - startTime < timeout do
         if game.Workspace:FindFirstChild("Dungeon") or Players.LocalPlayer.PlayerGui:FindFirstChild("DungeonUI") then
@@ -16,7 +16,18 @@ local function waitForDungeonLoad()
     return false
 end
 
--- Function to collect initial dungeon data (before teleport)
+-- Função para encontrar o portal da dungeon
+local function findDungeonPortal()
+    local dungeonsFolder = game.Workspace:FindFirstChild("Dungeons") or game.Workspace
+    for _, obj in ipairs(dungeonsFolder:GetDescendants()) do
+        if obj.Name:lower():match("portal") and obj:GetAttribute("Island") then
+            return obj
+        end
+    end
+    return nil
+end
+
+-- Função para coletar dados iniciais (antes do teleporte)
 local function getInitialDungeonData()
     local dungeonData = {
         island = "Unknown",
@@ -28,55 +39,25 @@ local function getInitialDungeonData()
         serverJobId = game.JobId or "Unknown"
     }
 
-    -- Search for dungeon portal or data in client-accessible locations
-    local possibleLocations = {
-        game.Workspace:FindFirstChild("DungeonPortal"),
-        game.Workspace:FindFirstChild("Dungeon"),
-        ReplicatedStorage:FindFirstChild("DungeonData")
-    }
-
-    for _, location in ipairs(possibleLocations) do
-        if location then
-            local success, result = pcall(function()
-                dungeonData.island = location:GetAttribute("Island") or location:GetAttribute("Location") or "Unknown"
-                dungeonData.name = location:GetAttribute("Name") or location.Name or dungeonData.name
-                dungeonData.type = location:GetAttribute("Type") or "Normal"
-                dungeonData.rank = location:GetAttribute("Rank") or "C"
-                dungeonData.status = location:GetAttribute("IsSpawned") and "Spawned" or "Not Spawned"
-            end)
-            if success then
-                break
-            else
-                warn("Error accessing location data: " .. tostring(result))
-            end
+    local portal = findDungeonPortal()
+    if portal then
+        local success, result = pcall(function()
+            dungeonData.island = portal:GetAttribute("Island") or portal.Parent.Name or "Unknown"
+            dungeonData.name = portal:GetAttribute("Name") or portal.Name or dungeonData.name
+            dungeonData.type = portal:GetAttribute("Type") or "Normal"
+            dungeonData.rank = portal:GetAttribute("Rank") or "C"
+            dungeonData.status = "Spawned"
+        end)
+        if not success then
+            warn("Erro ao acessar dados do portal: " .. tostring(result))
         end
     end
 
-    -- Fallback: Search Workspace for portal-related objects
-    if dungeonData.island == "Unknown" or dungeonData.name == "Unknown" then
-        for _, obj in ipairs(game.Workspace:GetDescendants()) do
-            if obj.Name:lower():match("portal") or obj.Name:lower():match("dungeon") then
-                local success, result = pcall(function()
-                    dungeonData.island = obj:GetAttribute("Island") or obj:GetAttribute("Location") or obj.Name:match("(%w+)%s*Portal") or dungeonData.island
-                    dungeonData.name = obj:GetAttribute("Name") or obj.Name or dungeonData.name
-                    dungeonData.type = obj:GetAttribute("Type") or "Normal"
-                    dungeonData.rank = obj:GetAttribute("Rank") or "C"
-                    dungeonData.status = "Spawned"
-                end)
-                if success then
-                    break
-                else
-                    warn("Error accessing object data: " .. tostring(result))
-                end
-            end
-        end
-    end
-
-    print("Initial Dungeon Data: Island=" .. dungeonData.island .. ", Name=" .. dungeonData.name)
+    print("Dados Iniciais: Island=" .. dungeonData.island .. ", Name=" .. dungeonData.name)
     return dungeonData
 end
 
--- Function to collect full dungeon data (after teleport)
+-- Função para coletar dados completos (após teleporte)
 local function getFullDungeonData(initialIsland)
     local dungeonData = {
         name = "Unknown",
@@ -91,7 +72,6 @@ local function getFullDungeonData(initialIsland)
         serverJobId = game.JobId or "Unknown"
     }
 
-    -- Check for dungeon in Workspace
     local dungeonObj = game.Workspace:FindFirstChild("Dungeon")
     if dungeonObj then
         local success, result = pcall(function()
@@ -103,11 +83,10 @@ local function getFullDungeonData(initialIsland)
             dungeonData.roomDisplay = "Room: " .. dungeonData.currentRoom .. "/" .. dungeonData.totalRooms
         end)
         if not success then
-            warn("Error accessing dungeon data: " .. tostring(result))
+            warn("Erro ao acessar dados da dungeon: " .. tostring(result))
         end
     end
 
-    -- Check PlayerGui for room display (e.g., "Room: 1/5")
     local playerGui = Players.LocalPlayer.PlayerGui
     for _, gui in ipairs(playerGui:GetDescendants()) do
         if gui:IsA("TextLabel") and gui.Text:match("Room:%s*%d+/%d+") then
@@ -120,50 +99,46 @@ local function getFullDungeonData(initialIsland)
             if success then
                 break
             else
-                warn("Error parsing room display: " .. tostring(result))
+                warn("Erro ao parsear exibição de sala: " .. tostring(result))
             end
         end
     end
 
-    print("Full Dungeon Data: Name=" .. dungeonData.name .. ", Rooms=" .. dungeonData.roomDisplay)
+    print("Dados Completos: Name=" .. dungeonData.name .. ", Rooms=" .. dungeonData.roomDisplay)
     return dungeonData
 end
 
--- Function to create and send Discord embed
+-- Função para criar e enviar o embed do Discord
 local function sendWebhook(data, isInitial)
     local embed = {
-        ["title"] = "Galaxy-Notify-Arise: Dungeon Report",
-        ["description"] = isInitial and 
+        title = "Galaxy-Notify-Arise: Dungeon Report",
+        description = isInitial and 
             ("**Spawn Location: " .. data.island .. "**\nDungeon detected in AriseCrossover! 📡") or 
             ("**Spawn Location: " .. data.island .. "**\nDungeon activity in progress! 🌌"),
-        ["color"] = 0x800080, -- Purple color
-        ["fields"] = isInitial and {
-            {["name"] = "Dungeon Name", ["value"] = data.name, ["inline"] = true},
-            {["name"] = "Rank", ["value"] = data.rank, ["inline"] = true},
-            {["name"] = "Type", ["value"] = data.type, ["inline"] = true},
-            {["name"] = "Status", ["value"] = data.status, ["inline"] = true},
-            {["name"] = "Server Job ID", ["value"] = data.serverJobId, ["inline"] = false}
+        color = 0x800080,
+        fields = isInitial and {
+            {name = "Dungeon Name", value = data.name, inline = true},
+            {name = "Rank", value = data.rank, inline = true},
+            {name = "Type", value = data.type, inline = true},
+            {name = "Status", value = data.status, inline = true},
+            {name = "Server Job ID", value = data.serverJobId, inline = false}
         } or {
-            {["name"] = "Dungeon Name", ["value"] = data.name, ["inline"] = true},
-            {["name"] = "Rank", ["value"] = data.rank, ["inline"] = true},
-            {["name"] = "Type", ["value"] = data.type, ["inline"] = true},
-            {["name"] = "Status", ["value"] = data.status, ["inline"] = true},
-            {["name"] = "Rooms", ["value"] = data.roomDisplay, ["inline"] = true},
-            {["name"] = "Server Job ID", ["value"] = data.serverJobId, ["inline"] = false}
+            {name = "Dungeon Name", value = data.name, inline = true},
+            {name = "Rank", value = data.rank, inline = true},
+            {name = "Type", value = data.type, inline = true},
+            {name = "Status", value = data.status, inline = true},
+            {name = "Rooms", value = data.roomDisplay, inline = true},
+            {name = "Server Job ID", value = data.serverJobId, inline = false}
         },
-        ["thumbnail"] = {
-            ["url"] = "https://i.imgur.com/5y2Z9kB.png" -- Placeholder dungeon image
+        footer = {
+            text = "Galaxy-Notify-Arise | Powered by xAI"
         },
-        ["footer"] = {
-            ["text"] = "Galaxy-Notify-Arise | Powered by xAI",
-            ["icon_url"] = "https://i.imgur.com/8dk7zSg.png" -- Placeholder logo
-        },
-        ["timestamp"] = data.timestamp
+        timestamp = data.timestamp
     }
 
     local payload = {
-        ["embeds"] = {embed},
-        ["content"] = isInitial and "🌌 Dungeon Spawn Alert from Galaxy-Notify-Arise! 🌌" or "🌌 Dungeon Progress Update from Galaxy-Notify-Arise! 🌌"
+        embeds = {embed},
+        content = isInitial and "🌌 Dungeon Spawn Alert from Galaxy-Notify-Arise! 🌌" or "🌌 Dungeon Progress Update from Galaxy-Notify-Arise! 🌌"
     }
 
     local success, response = pcall(function()
@@ -175,29 +150,26 @@ local function sendWebhook(data, isInitial)
     end)
 
     if success then
-        print("Webhook sent successfully!")
+        print("Webhook enviado com sucesso!")
     else
-        warn("Failed to send webhook: " .. tostring(response))
+        warn("Erro ao enviar webhook: " .. tostring(response))
     end
 end
 
--- Main execution
--- Step 1: Collect initial data (including island) and send webhook
+-- Execução principal
 local initialData = getInitialDungeonData()
 sendWebhook(initialData, true)
 
--- Step 2: Execute loadstring to teleport to dungeon server
 local success, result = pcall(function()
     return loadstring(game:HttpGet("https://raw.githubusercontent.com/JustLevel/goombahub/main/AriseCrossover.lua"))()
 end)
 
 if not success then
-    warn("Failed to execute loadstring: " .. tostring(result))
+    warn("Erro ao executar loadstring: " .. tostring(result))
     return
 end
 
--- Step 3: Wait for dungeon server load and collect full data
-wait(5) -- Wait for teleport to complete
+wait(5)
 if waitForDungeonLoad() then
     local fullData = getFullDungeonData(initialData.island)
     sendWebhook(fullData, false)
