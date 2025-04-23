@@ -28,50 +28,62 @@ local function getInitialDungeonData()
         serverJobId = game.JobId or "Unknown"
     }
 
-    -- Search for dungeon portal or data in common locations
+    -- Search for dungeon portal or data in client-accessible locations
     local possibleLocations = {
         game.Workspace:FindFirstChild("DungeonPortal"),
         game.Workspace:FindFirstChild("Dungeon"),
-        ReplicatedStorage:FindFirstChild("DungeonData"),
-        game.ServerStorage:FindFirstChild("DungeonInfo")
+        ReplicatedStorage:FindFirstChild("DungeonData")
     }
 
     for _, location in ipairs(possibleLocations) do
         if location then
-            dungeonData.island = location:GetAttribute("Island") or location:GetAttribute("Location") or "Unknown"
-            dungeonData.name = location:GetAttribute("Name") or location.Name or dungeonData.name
-            dungeonData.type = location:GetAttribute("Type") or "Normal"
-            dungeonData.rank = location:GetAttribute("Rank") or "C"
-            dungeonData.status = location:GetAttribute("IsSpawned") and "Spawned" or "Not Spawned"
-            break
-        end
-    end
-
-    -- Fallback: Search Workspace for portal-related objects
-    if dungeonData.island == "Unknown" then
-        for _, obj in ipairs(game.Workspace:GetDescendants()) do
-            if obj.Name:lower():match("portal") or obj.Name:lower():match("dungeon") then
-                dungeonData.island = obj:GetAttribute("Island") or obj:GetAttribute("Location") or obj.Name:match("(%w+)%s*Portal") or "Unknown"
-                dungeonData.name = obj:GetAttribute("Name") or obj.Name or dungeonData.name
-                dungeonData.type = obj:GetAttribute("Type") or "Normal"
-                dungeonData.rank = obj:GetAttribute("Rank") or "C"
-                dungeonData.status = "Spawned"
+            local success, result = pcall(function()
+                dungeonData.island = location:GetAttribute("Island") or location:GetAttribute("Location") or "Unknown"
+                dungeonData.name = location:GetAttribute("Name") or location.Name or dungeonData.name
+                dungeonData.type = location:GetAttribute("Type") or "Normal"
+                dungeonData.rank = location:GetAttribute("Rank") or "C"
+                dungeonData.status = location:GetAttribute("IsSpawned") and "Spawned" or "Not Spawned"
+            end)
+            if success then
                 break
+            else
+                warn("Error accessing location data: " .. tostring(result))
             end
         end
     end
 
+    -- Fallback: Search Workspace for portal-related objects
+    if dungeonData.island == "Unknown" or dungeonData.name == "Unknown" then
+        for _, obj in ipairs(game.Workspace:GetDescendants()) do
+            if obj.Name:lower():match("portal") or obj.Name:lower():match("dungeon") then
+                local success, result = pcall(function()
+                    dungeonData.island = obj:GetAttribute("Island") or obj:GetAttribute("Location") or obj.Name:match("(%w+)%s*Portal") or dungeonData.island
+                    dungeonData.name = obj:GetAttribute("Name") or obj.Name or dungeonData.name
+                    dungeonData.type = obj:GetAttribute("Type") or "Normal"
+                    dungeonData.rank = obj:GetAttribute("Rank") or "C"
+                    dungeonData.status = "Spawned"
+                end)
+                if success then
+                    break
+                else
+                    warn("Error accessing object data: " .. tostring(result))
+                end
+            end
+        end
+    end
+
+    print("Initial Dungeon Data: Island=" .. dungeonData.island .. ", Name=" .. dungeonData.name)
     return dungeonData
 end
 
 -- Function to collect full dungeon data (after teleport)
-local function getFullDungeonData()
+local function getFullDungeonData(initialIsland)
     local dungeonData = {
         name = "Unknown",
         type = "Unknown",
         rank = "Unknown",
         status = "Active",
-        island = "Unknown",
+        island = initialIsland or "Unknown",
         totalRooms = 0,
         currentRoom = 0,
         roomDisplay = "Room: 0/0",
@@ -82,27 +94,38 @@ local function getFullDungeonData()
     -- Check for dungeon in Workspace
     local dungeonObj = game.Workspace:FindFirstChild("Dungeon")
     if dungeonObj then
-        dungeonData.name = dungeonObj:GetAttribute("Name") or dungeonObj.Name or dungeonData.name
-        dungeonData.type = dungeonObj:GetAttribute("Type") or "Normal"
-        dungeonData.rank = dungeonObj:GetAttribute("Rank") or "C"
-        dungeonData.island = dungeonObj:GetAttribute("Island") or dungeonData.island
-        dungeonData.totalRooms = dungeonObj:GetAttribute("TotalRooms") or 0
-        dungeonData.currentRoom = dungeonObj:GetAttribute("CurrentRoom") or 0
-        dungeonData.roomDisplay = "Room: " .. dungeonData.currentRoom .. "/" .. dungeonData.totalRooms
+        local success, result = pcall(function()
+            dungeonData.name = dungeonObj:GetAttribute("Name") or dungeonObj.Name or dungeonData.name
+            dungeonData.type = dungeonObj:GetAttribute("Type") or "Normal"
+            dungeonData.rank = dungeonObj:GetAttribute("Rank") or "C"
+            dungeonData.totalRooms = dungeonObj:GetAttribute("TotalRooms") or 0
+            dungeonData.currentRoom = dungeonObj:GetAttribute("CurrentRoom") or 0
+            dungeonData.roomDisplay = "Room: " .. dungeonData.currentRoom .. "/" .. dungeonData.totalRooms
+        end)
+        if not success then
+            warn("Error accessing dungeon data: " .. tostring(result))
+        end
     end
 
     -- Check PlayerGui for room display (e.g., "Room: 1/5")
     local playerGui = Players.LocalPlayer.PlayerGui
     for _, gui in ipairs(playerGui:GetDescendants()) do
         if gui:IsA("TextLabel") and gui.Text:match("Room:%s*%d+/%d+") then
-            dungeonData.roomDisplay = gui.Text
-            local current, total = gui.Text:match("Room:%s*(%d+)/(%d+)")
-            dungeonData.currentRoom = tonumber(current) or dungeonData.currentRoom
-            dungeonData.totalRooms = tonumber(total) or dungeonData.totalRooms
-            break
+            local success, result = pcall(function()
+                dungeonData.roomDisplay = gui.Text
+                local current, total = gui.Text:match("Room:%s*(%d+)/(%d+)")
+                dungeonData.currentRoom = tonumber(current) or dungeonData.currentRoom
+                dungeonData.totalRooms = tonumber(total) or dungeonData.totalRooms
+            end)
+            if success then
+                break
+            else
+                warn("Error parsing room display: " .. tostring(result))
+            end
         end
     end
 
+    print("Full Dungeon Data: Name=" .. dungeonData.name .. ", Rooms=" .. dungeonData.roomDisplay)
     return dungeonData
 end
 
@@ -176,7 +199,6 @@ end
 -- Step 3: Wait for dungeon server load and collect full data
 wait(5) -- Wait for teleport to complete
 if waitForDungeonLoad() then
-    local fullData = getFullDungeonData()
-    fullData.island = initialData.island -- Preserve island from initial data
+    local fullData = getFullDungeonData(initialData.island)
     sendWebhook(fullData, false)
 end
