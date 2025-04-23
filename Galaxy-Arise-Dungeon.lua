@@ -1,8 +1,42 @@
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local webhookURL = "https://discord.com/api/webhooks/1347400165027217490/b0q6WACLsRPC_XjrNNNYXOKG-lRp9-vccdKxmlZE-wAMeraf5dZ5PQS0HWHd0THhp37V"
-local proxyWebhookURL = "https://webhook.lewisakura.moe/api/webhooks/1347400165027217490/b0q6WACLsRPC_XjrNNNYXOKG-lRp9-vccdKxmlZE-wAMeraf5dZ5PQS0HWHd0THhp37V"
+local UserInputService = game:GetService("UserInputService")
+local dbFile = "dungeon_data.json"
+
+-- Função para salvar dados no banco de dados
+local function saveToDatabase(data, isActive)
+    local dbData = {
+        initialData = data,
+        isActive = isActive,
+        lastUpdated = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    }
+    local success, result = pcall(function()
+        writefile(dbFile, HttpService:JSONEncode(dbData))
+    end)
+    if success then
+        print("Dados salvos em " .. dbFile)
+    else
+        warn("Erro ao salvar dados no banco de dados: " .. tostring(result))
+    end
+end
+
+-- Função para carregar dados do banco de dados
+local function loadFromDatabase()
+    local success, result = pcall(function()
+        if isfile(dbFile) then
+            return HttpService:JSONDecode(readfile(dbFile))
+        end
+        return nil
+    end)
+    if success and result then
+        print("Dados carregados do banco de dados")
+        return result
+    else
+        print("Nenhum banco de dados encontrado, criando novo")
+        return nil
+    end
+end
 
 -- Função para esperar o carregamento do servidor da dungeon
 local function waitForDungeonLoad()
@@ -22,65 +56,116 @@ end
 local function findDungeonPortal()
     local methods = {
         -- Método 1: Busca por objetos com atributos "Island", "Rank", "Type"
-        function()
-            for _, obj in ipairs(game.Workspace:GetDescendants()) do
-                if obj:GetAttribute("Island") and obj:GetAttribute("Rank") and obj:GetAttribute("Type") then
-                    print("Portal encontrado via atributos: " .. obj.Name)
-                    return obj
-                end
-            end
-            return nil
-        end,
-        -- Método 2: Busca por objetos com nome contendo "Portal" ou "DungeonPortal"
-        function()
-            for _, obj in ipairs(game.Workspace:GetDescendants()) do
-                if obj.Name:lower():match("portal") or obj.Name:lower():match("dungeon") then
-                    print("Portal encontrado via nome: " .. obj.Name)
-                    return obj
-                end
-            end
-            return nil
-        end,
-        -- Método 3: Busca em ReplicatedStorage por pastas ou valores de dungeon
-        function()
-            local dungeonFolder = ReplicatedStorage:FindFirstChild("Dungeons") or ReplicatedStorage:FindFirstChild("DungeonData")
-            if dungeonFolder then
-                for _, obj in ipairs(dungeonFolder:GetDescendants()) do
-                    if obj:IsA("StringValue") or obj:IsA("IntValue") or obj:GetAttribute("Island") then
-                        print("Portal encontrado via ReplicatedStorage: " .. obj.Name)
-                        return obj
+        {
+            func = function()
+                for _, obj in ipairs(game.Workspace:GetDescendants()) do
+                    if obj:GetAttribute("Island") and obj:GetAttribute("Rank") and obj:GetAttribute("Type") then
+                        return obj, "Atributos Island/Rank/Type"
                     end
                 end
-            end
-            return nil
-        end,
-        -- Método 4: Busca por objetos em pastas de ilhas (ex.: Leveling Island)
-        function()
-            local islandFolders = {"Leveling Island", "Grass Village", "Brum Island"}
-            for _, folderName in ipairs(islandFolders) do
-                local folder = game.Workspace:FindFirstChild(folderName)
-                if folder then
-                    for _, obj in ipairs(folder:GetDescendants()) do
-                        if obj.Name:lower():match("portal") or obj:GetAttribute("Island") then
-                            print("Portal encontrado em pasta de ilha: " .. obj.Name .. " em " .. folderName)
-                            return obj
+                return nil, nil
+            end,
+            name = "Método 1"
+        },
+        -- Método 2: Busca por nomes como "Portal", "DungeonPortal", "Gate", "Spawn"
+        {
+            func = function()
+                local keywords = {"portal", "dungeonportal", "gate", "spawn"}
+                for _, obj in ipairs(game.Workspace:GetDescendants()) do
+                    for _, keyword in ipairs(keywords) do
+                        if obj.Name:lower():match(keyword) then
+                            return obj, "Nome contendo " .. keyword
                         end
                     end
                 end
-            end
-            return nil
-        end
+                return nil, nil
+            end,
+            name = "Método 2"
+        },
+        -- Método 3: Busca em ReplicatedStorage por pastas ou valores
+        {
+            func = function()
+                local dungeonFolder = ReplicatedStorage:FindFirstChild("Dungeons") or ReplicatedStorage:FindFirstChild("DungeonData")
+                if dungeonFolder then
+                    for _, obj in ipairs(dungeonFolder:GetDescendants()) do
+                        if obj:IsA("StringValue") or obj:IsA("IntValue") or obj:GetAttribute("Island") then
+                            return obj, "ReplicatedStorage Dungeons/Data"
+                        end
+                    end
+                end
+                return nil, nil
+            end,
+            name = "Método 3"
+        },
+        -- Método 4: Busca em pastas de ilhas
+        {
+            func = function()
+                local islandFolders = {"Leveling Island", "Grass Village", "Brum Island", "Main Island"}
+                for _, folderName in ipairs(islandFolders) do
+                    local folder = game.Workspace:FindFirstChild(folderName)
+                    if folder then
+                        for _, obj in ipairs(folder:GetDescendants()) do
+                            if obj.Name:lower():match("portal") or obj:GetAttribute("Island") then
+                                return obj, "Pasta de ilha " .. folderName
+                            end
+                        end
+                    end
+                end
+                return nil, nil
+            end,
+            name = "Método 4"
+        },
+        -- Método 5: Busca por atributos alternativos
+        {
+            func = function()
+                for _, obj in ipairs(game.Workspace:GetDescendants()) do
+                    if obj:GetAttribute("Location") or obj:GetAttribute("Difficulty") then
+                        return obj, "Atributos Location/Difficulty"
+                    end
+                end
+                return nil, nil
+            end,
+            name = "Método 5"
+        },
+        -- Método 6: Busca por eventos remotos
+        {
+            func = function()
+                for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+                    if obj:IsA("RemoteEvent") and obj.Name:lower():match("dungeon") then
+                        return obj, "Evento remoto Dungeon"
+                    end
+                end
+                return nil, nil
+            end,
+            name = "Método 6"
+        },
+        -- Método 7: Busca por objetos com atributos genéricos
+        {
+            func = function()
+                for _, obj in ipairs(game.Workspace:GetDescendants()) do
+                    if obj:GetAttributes() and next(obj:GetAttributes()) then
+                        for attr, _ in pairs(obj:GetAttributes()) do
+                            if attr:lower():match("dungeon") or attr:lower():match("island") then
+                                return obj, "Atributo genérico " .. attr
+                            end
+                        end
+                    end
+                end
+                return nil, nil
+            end,
+            name = "Método 7"
+        }
     }
 
-    for i, method in ipairs(methods) do
-        local portal = method()
+    for _, method in ipairs(methods) do
+        local portal, methodDetail = method.func()
         if portal then
-            print("Método " .. i .. " encontrou portal: " .. portal.Name)
-            return portal
+            print(method.name .. " encontrou portal: " .. portal.Name .. " (" .. (methodDetail or "Sem detalhes") .. ")")
+            return portal, method.name .. " - " .. (methodDetail or "Sem detalhes")
         end
     end
-    print("Nenhum portal encontrado")
-    return nil
+    print("Nenhum portal encontrado após tentar todos os métodos")
+    return nil, nil
 end
 
 -- Função para coletar dados iniciais (antes do teleporte)
@@ -92,24 +177,27 @@ local function getInitialDungeonData()
         rank = "Unknown",
         status = "Not Spawned",
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-        serverJobId = game.JobId or "Unknown"
+        serverJobId = game.JobId or "Unknown",
+        methodUsed = "Nenhum"
     }
 
-    local portal = findDungeonPortal()
+    local portal, methodDetail = findDungeonPortal()
     if portal then
         local success, result = pcall(function()
-            dungeonData.island = portal:GetAttribute("Island") or portal.Parent.Name or "Unknown"
+            dungeonData.island = portal:GetAttribute("Island") or portal:GetAttribute("Location") or portal.Parent.Name or "Unknown"
             dungeonData.name = portal:GetAttribute("Name") or portal.Name or dungeonData.name
             dungeonData.type = portal:GetAttribute("Type") or portal:GetAttribute("DungeonType") or "Normal"
             dungeonData.rank = portal:GetAttribute("Rank") or portal:GetAttribute("Difficulty") or "C"
             dungeonData.status = "Spawned"
+            dungeonData.methodUsed = methodDetail or "Desconhecido"
         end)
         if not success then
             warn("Erro ao acessar dados do portal: " .. tostring(result))
         end
     end
 
-    print("Dados Iniciais: Island=" .. dungeonData.island .. ", Name=" .. dungeonData.name .. ", Type=" .. dungeonData.type .. ", Rank=" .. dungeonData.rank)
+    print("Dados Iniciais: Island=" .. dungeonData.island .. ", Name=" .. dungeonData.name .. ", Type=" .. dungeonData.type .. ", Rank=" .. dungeonData.rank .. ", Método=" .. dungeonData.methodUsed)
+    saveToDatabase(dungeonData, true) -- Salvar dados iniciais e estado ativo
     return dungeonData
 end
 
@@ -125,129 +213,247 @@ local function getFullDungeonData(initialIsland)
         currentRoom = 0,
         roomDisplay = "Room: 0/0",
         timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
-        serverJobId = game.JobId or "Unknown"
+        serverJobId = game.JobId or "Unknown",
+        methodUsed = "Nenhum"
     }
 
-    -- Método 1: Verificar atributos do objeto Dungeon
-    local dungeonObj = game.Workspace:FindFirstChild("Dungeon")
-    if dungeonObj then
-        local success, result = pcall(function()
-            dungeonData.name = dungeonObj:GetAttribute("Name") or dungeonObj.Name or dungeonData.name
-            dungeonData.type = dungeonObj:GetAttribute("Type") or dungeonObj:GetAttribute("DungeonType") or "Normal"
-            dungeonData.rank = dungeonObj:GetAttribute("Rank") or dungeonObj:GetAttribute("Difficulty") or "C"
-            dungeonData.totalRooms = dungeonObj:GetAttribute("TotalRooms") or 0
-            dungeonData.currentRoom = dungeonObj:GetAttribute("CurrentRoom") or 0
-            dungeonData.roomDisplay = "Room: " .. dungeonData.currentRoom .. "/" .. dungeonData.totalRooms
-        end)
-        if not success then
-            warn("Erro ao acessar dados da dungeon: " .. tostring(result))
+    local methods = {
+        -- Método 1: Atributos do objeto Dungeon
+        {
+            func = function()
+                local dungeonObj = game.Workspace:FindFirstChild("Dungeon")
+                if dungeonObj then
+                    dungeonData.name = dungeonObj:GetAttribute("Name") or dungeonObj.Name or dungeonData.name
+                    dungeonData.type = dungeonObj:GetAttribute("Type") or dungeonObj:GetAttribute("DungeonType") or "Normal"
+                    dungeonData.rank = dungeonObj:GetAttribute("Rank") or dungeonObj:GetAttribute("Difficulty") or "C"
+                    dungeonData.totalRooms = dungeonObj:GetAttribute("TotalRooms") or 0
+                    dungeonData.currentRoom = dungeonObj:GetAttribute("CurrentRoom") or 0
+                    dungeonData.roomDisplay = "Room: " .. dungeonData.currentRoom .. "/" .. dungeonData.totalRooms
+                    return true, "Atributos TotalRooms/CurrentRoom"
+                end
+                return false, nil
+            end,
+            name = "Método 1"
+        },
+        -- Método 2: PlayerGui TextLabel
+        {
+            func = function()
+                local playerGui = Players.LocalPlayer.PlayerGui
+                for _, gui in ipairs(playerGui:GetDescendants()) do
+                    if gui:IsA("TextLabel") and gui.Text:match("Room:%s*%d+/%d+") then
+                        dungeonData.roomDisplay = gui.Text
+                        local current, total = gui.Text:match("Room:%s*(%d+)/(%d+)")
+                        dungeonData.currentRoom = tonumber(current) or dungeonData.currentRoom
+                        dungeonData.totalRooms = tonumber(total) or dungeonData.totalRooms
+                        return true, "TextLabel Room: X/Y"
+                    end
+                end
+                return false, nil
+            end,
+            name = "Método 2"
+        },
+        -- Método 3: Objetos Room/Stage
+        {
+            func = function()
+                for _, obj in ipairs(game.Workspace:GetDescendants()) do
+                    if obj:GetAttribute("RoomNumber") or obj:GetAttribute("Stage") or obj.Name:lower():match("room") or obj.Name:lower():match("stage") then
+                        dungeonData.currentRoom = obj:GetAttribute("RoomNumber") or obj:GetAttribute("Stage") or dungeonData.currentRoom
+                        dungeonData.totalRooms = obj:GetAttribute("TotalRooms") or obj:GetAttribute("TotalStages") or dungeonData.totalRooms
+                        dungeonData.roomDisplay = "Room: " .. dungeonData.currentRoom .. "/" .. dungeonData.totalRooms
+                        return true, "Objeto RoomNumber/Stage"
+                    end
+                end
+                return false, nil
+            end,
+            name = "Método 3"
+        },
+        -- Método 4: Atributos alternativos
+        {
+            func = function()
+                for _, obj in ipairs(game.Workspace:GetDescendants()) do
+                    if obj:GetAttribute("CurrentStage") or obj:GetAttribute("MaxRooms") then
+                        dungeonData.currentRoom = obj:GetAttribute("CurrentStage") or dungeonData.currentRoom
+                        dungeonData.totalRooms = obj:GetAttribute("MaxRooms") or dungeonData.totalRooms
+                        dungeonData.roomDisplay = "Room: " .. dungeonData.currentRoom .. "/" .. dungeonData.totalRooms
+                        return true, "Atributos CurrentStage/MaxRooms"
+                    end
+                end
+                return false, nil
+            end,
+            name = "Método 4"
+        },
+        -- Método 5: Busca por objetos com atributos genéricos
+        {
+            func = function()
+                for _, obj in ipairs(game.Workspace:GetDescendants()) do
+                    if obj:GetAttributes() and next(obj:GetAttributes()) then
+                        for attr, _ in pairs(obj:GetAttributes()) do
+                            if attr:lower():match("room") or attr:lower():match("stage") then
+                                dungeonData.currentRoom = obj:GetAttribute(attr) or dungeonData.currentRoom
+                                dungeonData.totalRooms = obj:GetAttribute("Total" .. attr) or dungeonData.totalRooms
+                                dungeonData.roomDisplay = "Room: " .. dungeonData.currentRoom .. "/" .. dungeonData.totalRooms
+                                return true, "Atributo genérico " .. attr
+                            end
+                        end
+                    end
+                end
+                return false, nil
+            end,
+            name = "Método 5"
+        }
+    }
+
+    for _, method in ipairs(methods) do
+        local success, methodDetail = method.func()
+        if success then
+            dungeonData.methodUsed = method.name .. " - " .. (methodDetail or "Sem detalhes")
+            print(method.name .. " encontrou dados: " .. dungeonData.roomDisplay .. " (" .. methodDetail .. ")")
+            break
         end
     end
 
-    -- Método 2: Verificar PlayerGui para exibição de salas
-    local playerGui = Players.LocalPlayer.PlayerGui
-    for _, gui in ipairs(playerGui:GetDescendants()) do
-        if gui:IsA("TextLabel") and gui.Text:match("Room:%s*%d+/%d+") then
-            local success, result = pcall(function()
-                dungeonData.roomDisplay = gui.Text
-                local current, total = gui.Text:match("Room:%s*(%d+)/(%d+)")
-                dungeonData.currentRoom = tonumber(current) or dungeonData.currentRoom
-                dungeonData.totalRooms = tonumber(total) or dungeonData.totalRooms
-            end)
-            if success then
-                print("Salas encontradas via PlayerGui: " .. dungeonData.roomDisplay)
-                break
-            else
-                warn("Erro ao parsear exibição de sala: " .. tostring(result))
-            end
-        end
-    end
-
-    -- Método 3: Busca por objetos com RoomNumber ou similar
-    for _, obj in ipairs(game.Workspace:GetDescendants()) do
-        if obj:GetAttribute("RoomNumber") or obj.Name:lower():match("room") then
-            local success, result = pcall(function()
-                dungeonData.currentRoom = obj:GetAttribute("RoomNumber") or dungeonData.currentRoom
-                dungeonData.totalRooms = obj:GetAttribute("TotalRooms") or dungeonData.totalRooms
-                dungeonData.roomDisplay = "Room: " .. dungeonData.currentRoom .. "/" .. dungeonData.totalRooms
-            end)
-            if success then
-                print("Salas encontradas via objeto Room: " .. dungeonData.roomDisplay)
-                break
-            end
-        end
-    end
-
-    print("Dados Completos: Name=" .. dungeonData.name .. ", Rooms=" .. dungeonData.roomDisplay .. ", Island=" .. dungeonData.island)
+    print("Dados Completos: Name=" .. dungeonData.name .. ", Rooms=" .. dungeonData.roomDisplay .. ", Island=" .. dungeonData.island .. ", Método=" .. dungeonData.methodUsed)
     return dungeonData
 end
 
--- Função para criar e enviar o embed do Discord
-local function sendWebhook(data, isInitial)
-    local embed = {
-        title = "Galaxy-Notify-Arise: Dungeon Report",
-        description = isInitial and 
-            ("**Spawn Location: " .. data.island .. "**\nDungeon detectada em AriseCrossover! 📡") or 
-            ("**Spawn Location: " .. data.island .. "**\nAtividade em andamento na dungeon! 🌌"),
-        color = 0x800080,
-        fields = isInitial and {
-            {name = "Nome da Dungeon", value = data.name, inline = true},
-            {name = "Rank", value = data.rank, inline = true},
-            {name = "Tipo", value = data.type, inline = true},
-            {name = "Status", value = data.status, inline = true},
-            {name = "ID do Servidor", value = data.serverJobId, inline = false}
-        } or {
-            {name = "Nome da Dungeon", value = data.name, inline = true},
-            {name = "Rank", value = data.rank, inline = true},
-            {name = "Tipo", value = data.type, inline = true},
-            {name = "Status", value = data.status, inline = true},
-            {name = "Salas", value = data.roomDisplay, inline = true},
-            {name = "ID do Servidor", value = data.serverJobId, inline = false}
-        },
-        footer = {
-            text = "Galaxy-Notify-Arise | Powered by xAI"
-        },
-        timestamp = data.timestamp
-    }
+-- Função para criar o mini menu
+local function createMiniMenu(initialData, fullData)
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Parent = Players.LocalPlayer.PlayerGui
+    ScreenGui.Name = "DungeonNotifyMenu"
 
-    local payload = {
-        embeds = {embed},
-        content = isInitial and "🌌 Alerta de Spawn de Dungeon - Galaxy-Notify-Arise! 🌌" or "🌌 Atualização de Progresso na Dungeon - Galaxy-Notify-Arise! 🌌"
-    }
+    local Frame = Instance.new("Frame")
+    Frame.Size = UDim2.new(0, 300, 0, 400)
+    Frame.Position = UDim2.new(0, 10, 0, 10)
+    Frame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+    Frame.BorderSizePixel = 0
+    Frame.Parent = ScreenGui
+    Frame.Active = true
+    Frame.Draggable = true
 
-    local urls = {webhookURL, proxyWebhookURL}
-    for _, url in ipairs(urls) do
-        local success, response = pcall(function()
-            return HttpService:PostAsync(
-                url,
-                HttpService:JSONEncode(payload),
-                Enum.HttpContentType.ApplicationJson
-            )
-        end)
-        if success then
-            print("Webhook enviado com sucesso para: " .. url)
-            return
-        else
-            warn("Erro ao enviar webhook para " .. url .. ": " .. tostring(response))
+    local TitleLabel = Instance.new("TextLabel")
+    TitleLabel.Size = UDim2.new(1, 0, 0, 30)
+    TitleLabel.Position = UDim2.new(0, 0, 0, 0)
+    TitleLabel.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    TitleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TitleLabel.Text = "Galaxy-Notify-Arise"
+    TitleLabel.Font = Enum.Font.SourceSansBold
+    TitleLabel.TextSize = 18
+    TitleLabel.Parent = Frame
+
+    local MinimizeButton = Instance.new("TextButton")
+    MinimizeButton.Size = UDim2.new(0, 30, 0, 30)
+    MinimizeButton.Position = UDim2.new(1, -30, 0, 0)
+    MinimizeButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    MinimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    MinimizeButton.Text = "-"
+    MinimizeButton.Font = Enum.Font.SourceSansBold
+    MinimizeButton.TextSize = 18
+    MinimizeButton.Parent = Frame
+
+    local ContentFrame = Instance.new("Frame")
+    ContentFrame.Size = UDim2.new(1, -10, 1, -40)
+    ContentFrame.Position = UDim2.new(0, 5, 0, 35)
+    ContentFrame.BackgroundTransparency = 1
+    ContentFrame.Parent = Frame
+
+    local function updateContent()
+        for _, child in ipairs(ContentFrame:GetChildren()) do
+            child:Destroy()
+        end
+
+        local function addLabel(text, yOffset)
+            local label = Instance.new("TextLabel")
+            label.Size = UDim2.new(1, 0, 0, 20)
+            label.Position = UDim2.new(0, 0, 0, yOffset)
+            label.BackgroundTransparency = 1
+            label.TextColor3 = Color3.fromRGB(200, 200, 200)
+            label.Text = text
+            label.Font = Enum.Font.SourceSans
+            label.TextSize = 14
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.Parent = ContentFrame
+        end
+
+        local yOffset = 0
+        addLabel("Dados Iniciais:", yOffset)
+        yOffset = yOffset + 20
+        addLabel("  Ilha: " .. (initialData.island or "Unknown"), yOffset)
+        yOffset = yOffset + 20
+        addLabel("  Nome: " .. (initialData.name or "Unknown"), yOffset)
+        yOffset = yOffset + 20
+        addLabel("  Tipo: " .. (initialData.type or "Unknown"), yOffset)
+        yOffset = yOffset + 20
+        addLabel("  Rank: " .. (initialData.rank or "Unknown"), yOffset)
+        yOffset = yOffset + 20
+        addLabel("  Status: " .. (initialData.status or "Not Spawned"), yOffset)
+        yOffset = yOffset + 20
+        addLabel("  Método: " .. (initialData.methodUsed or "Nenhum"), yOffset)
+        yOffset = yOffset + 20
+
+        if fullData then
+            addLabel("Dados Completos:", yOffset)
+            yOffset = yOffset + 20
+            addLabel("  Ilha: " .. (fullData.island or "Unknown"), yOffset)
+            yOffset = yOffset + 20
+            addLabel("  Nome: " .. (fullData.name or "Unknown"), yOffset)
+            yOffset = yOffset + 20
+            addLabel("  Tipo: " .. (fullData.type or "Unknown"), yOffset)
+            yOffset = yOffset + 20
+            addLabel("  Rank: " .. (fullData.rank or "Unknown"), yOffset)
+            yOffset = yOffset + 20
+            addLabel("  Salas: " .. (fullData.roomDisplay or "Room: 0/0"), yOffset)
+            yOffset = yOffset + 20
+            addLabel("  Método: " .. (fullData.methodUsed or "Nenhum"), yOffset)
         end
     end
+
+    updateContent()
+
+    local isMinimized = false
+    MinimizeButton.MouseButton1Click:Connect(function()
+        isMinimized = not isMinimized
+        if isMinimized then
+            Frame.Size = UDim2.new(0, 300, 0, 30)
+            MinimizeButton.Text = "+"
+            ContentFrame.Visible = false
+        else
+            Frame.Size = UDim2.new(0, 300, 0, 400)
+            MinimizeButton.Text = "-"
+            ContentFrame.Visible = true
+        end
+    end)
+
+    return updateContent
 end
 
 -- Execução principal
+local db = loadFromDatabase()
 local initialData = getInitialDungeonData()
-sendWebhook(initialData, true)
+local updateMenu = createMiniMenu(initialData, nil)
 
-local success, result = pcall(function()
-    return loadstring(game:HttpGet("https://raw.githubusercontent.com/JustLevel/goombahub/main/AriseCrossover.lua"))()
-end)
+-- Verificar se estamos no servidor da dungeon
+if db and db.isActive then
+    print("Script já ativado, verificando servidor da dungeon")
+    if waitForDungeonLoad() then
+        local fullData = getFullDungeonData(initialData.island)
+        updateMenu(initialData, fullData)
+        saveToDatabase(initialData, false) -- Desativar estado após coletar dados completos
+    end
+else
+    local success, result = pcall(function()
+        return loadstring(game:HttpGet("https://raw.githubusercontent.com/JustLevel/goombahub/main/AriseCrossover.lua"))()
+    end)
+    if not success then
+        warn("Erro ao executar loadstring: " .. tostring(result))
+        saveToDatabase(initialData, false)
+        return
+    end
 
-if not success then
-    warn("Erro ao executar loadstring: " .. tostring(result))
-    return
-end
-
-wait(5)
-if waitForDungeonLoad() then
-    local fullData = getFullDungeonData(initialData.island)
-    sendWebhook(fullData, false)
+    wait(5)
+    if waitForDungeonLoad() then
+        local fullData = getFullDungeonData(initialData.island)
+        updateMenu(initialData, fullData)
+        saveToDatabase(initialData, false) -- Desativar estado após coletar dados completos
+    end
 end
